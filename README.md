@@ -62,6 +62,27 @@ This project is inspired by [Flying-Toast/qiyi_smartcube_protocol](https://githu
 - Protocol details based on the excellent reverse engineering work by [Flying-Toast/qiyi_smartcube_protocol](https://github.com/Flying-Toast/qiyi_smartcube_protocol)
 - AES encryption via [aes-js](https://github.com/ricmoo/aes-js)
 
+
+---
+
+## 💡 Tip: Remembering Your MAC Address
+
+By default, the app prompts you to enter your cube's MAC address every time you connect.  
+To make development and use easier, you can hardcode a default value into the prompt by modifying this line in `index.html`:
+
+```js
+const macStr = prompt("Enter cube MAC address (e.g. CC:A3:00:00:25:13)\nIf you are using Google Chrome, you can find it at:\nchrome://bluetooth-internals/#devices");
+```
+
+Change it to:
+
+```js
+const macStr = prompt("Enter cube MAC address (e.g. CC:A3:00:00:25:13)\nIf you are using Google Chrome, you can find it at:\nchrome://bluetooth-internals/#devices", "<YOUR MAC ADDRESS>");
+```
+
+This way, the MAC address will auto-fill in the prompt every time you connect.
+
+
 ---
 
 ## 📜 License
