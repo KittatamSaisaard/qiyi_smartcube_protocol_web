@@ -1,4 +1,4 @@
-
+![Demo](https://github.com/user-attachments/assets/f22be0f0-c9ee-4c5c-a7f7-3845f1e573ca)
 
 # QiYi Smart Cube Web
 
