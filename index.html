@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>QiYi Smart Cube Web</title>
+  <style>
+    /* CSS for displaying each cube face as a 3x3 grid */
+    .face {
+      display: grid;
+      grid-template-columns: repeat(3, 30px);
+      grid-template-rows: repeat(3, 30px);
+      gap: 2px;
+    }
+
+    /* Individual facelet styles */
+    .facelet {
+      width: 30px;
+      height: 30px;
+      border: 1px solid #000;
+      text-align: center;
+      line-height: 30px;
+    }
+
+    /* Styling for the face labels (U, L, F, etc.) */
+    .label {
+      text-align: center;
+      font-weight: bold;
+      margin-bottom: 4px;
+    }
+
+    /* Grid layout for arranging all six faces of the cube */
+    #cubeContainer {
+      display: grid;
+      grid-template-columns: repeat(4, max-content);
+      grid-template-rows: repeat(3, max-content);
+      gap: 5px;
+      margin: 10px 0;
+    }
+
+    /* Styling for the log section */
+    #log {
+      white-space: pre-wrap;
+      max-height: 300px;
+      overflow-y: scroll;
+      background: #eee;
+      padding: 10px;
+    }
+  </style>
+  <!-- Import AES encryption library -->
+  <script src="https://cdn.jsdelivr.net/npm/aes-js@3.0.0/index.min.js"></script>
+</head>
+<body>
+  <h1>QiYi Smart Cube Web</h1>
+
+  <!-- Button to connect to the cube via Bluetooth -->
+  <button id="connectBtn">Connect Cube</button>
+
+  <!-- Button to reset cube to a solved state -->
+  <button id="resetCubeBtn">Reset to Solved State</button>
+
+  <!-- Visual layout of cube faces -->
+  <div id="cubeContainer">
+    <div></div>
+    <div><div class="label">U</div><div id="faceU" class="face"></div></div>
+    <div></div><div></div>
+    <div><div class="label">L</div><div id="faceL" class="face"></div></div>
+    <div><div class="label">F</div><div id="faceF" class="face"></div></div>
+    <div><div class="label">R</div><div id="faceR" class="face"></div></div>
+    <div><div class="label">B</div><div id="faceB" class="face"></div></div>
+    <div></div>
+    <div><div class="label">D</div><div id="faceD" class="face"></div></div>
+    <div></div><div></div>
+  </div>
+
+  <!-- Display cube's battery level -->
+  <p><strong>Battery Level:</strong> <span id="batteryLevel">--</span>%</p>
+
+  <h2>Logs</h2>
+  <!-- Log output area -->
+  <div id="log"></div>
+
+  <script>
+    // Predefined AES encryption key for communication
+    const AES_KEY = new Uint8Array([87, 177, 249, 171, 205, 90, 232, 167, 156, 185, 140, 231, 87, 140, 81, 8]);
+    let fff6Characteristic; // Bluetooth characteristic for communication
+
+    const log = msg => document.getElementById('log').textContent += msg + "\n";
+
+    const colorToEmoji = c => ['🟧','🟥','🟨','⬜','🟩','🟦'][c]; // Map color codes to emojis
+
+    // Parse cube state from received bytes
+    function parseCubeState(raw) {
+      let colors = [];
+      for (let b of raw.slice(0, 27)) {
+        colors.push(b & 0x0F);
+        colors.push((b >> 4) & 0x0F);
+      }
+      return colors;
+    }
+
+    // Render the cube state on the page
+    function renderCube(state) {
+      const faceMap = {
+        U: state.slice(0, 9),
+        R: state.slice(9, 18),
+        F: state.slice(18, 27),
+        D: state.slice(27, 36),
+        L: state.slice(36, 45),
+        B: state.slice(45, 54),
+      };
+      for (const [key, facelets] of Object.entries(faceMap)) {
+        const faceDiv = document.getElementById("face" + key);
+        faceDiv.innerHTML = '';
+        for (let i = 0; i < 9; i++) {
+          const d = document.createElement('div');
+          d.className = 'facelet';
+          d.textContent = colorToEmoji(facelets[i]);
+          faceDiv.appendChild(d);
+        }
+      }
+    }
+
+    // Construct a packet representing the solved cube state
+    function buildSyncStateSolved() {
+      const colors = [
+        3,3,3,3,3,3,3,3,3, // U - White
+        1,1,1,1,1,1,1,1,1, // R - Red
+        4,4,4,4,4,4,4,4,4, // F - Green
+        2,2,2,2,2,2,2,2,2, // D - Yellow
+        0,0,0,0,0,0,0,0,0, // L - Orange
+        5,5,5,5,5,5,5,5,5  // B - Blue
+      ];
+      const bytes = new Uint8Array(27);
+      for (let i = 0; i < 27; i++) {
+        const lo = colors[i * 2];
+        const hi = colors[i * 2 + 1];
+        bytes[i] = lo | (hi << 4);
+      }
+      const packet = new Uint8Array(36);
+      packet.set([0x04, 0x17, 0x88, 0x8b, 0x31], 0); // Sync header
+      packet.set(bytes, 5); // Solved facelet data
+      packet[33] = 0x00; // Padding
+      packet[34] = 0x00;
+      packet[35] = 0x00; // Checksum (unused here)
+      packet[36] = 0x00;
+      return packet;
+    }
+
+    async function sendSyncState() {
+      const body = buildSyncStateSolved();
+      await sendEncrypted(body);
+      log("Sync State (solved) sent.");
+    }
+
+    // Encrypt a message using AES ECB
+    function encryptMessage(data) {
+      const aes = new aesjs.ModeOfOperation.ecb(AES_KEY);
+      const padded = new Uint8Array([...data, ...new Array(16 - (data.length % 16)).fill(0)]);
+      const encrypted = new Uint8Array(padded.length);
+      for (let i = 0; i < padded.length; i += 16) {
+        encrypted.set(aes.encrypt(padded.slice(i, i + 16)), i);
+      }
+      return encrypted;
+    }
+
+    // Decrypt an encrypted message
+    function decryptMessage(data) {
+      const aes = new aesjs.ModeOfOperation.ecb(AES_KEY);
+      const decrypted = new Uint8Array(data.length);
+      for (let i = 0; i < data.length; i += 16) {
+        decrypted.set(aes.decrypt(data.slice(i, i + 16)), i);
+      }
+      return decrypted;
+    }
+
+    // Compute CRC16-Modbus checksum
+    function crc16Modbus(data) {
+      let crc = 0xFFFF;
+      for (let i = 0; i < data.length; i++) {
+        crc ^= data[i];
+        for (let j = 0; j < 8; j++) {
+          if ((crc & 1) !== 0) {
+            crc >>= 1;
+            crc ^= 0xA001;
+          } else {
+            crc >>= 1;
+          }
+        }
+      }
+      return crc;
+    }
+
+    // Build the App Hello message from reversed MAC
+    function buildAppHello(macReversed) {
+      const data = new Uint8Array(19);
+      for (let i = 0; i < 11; i++) data[i] = 0x00;
+      data.set(macReversed, 11);
+      return data;
+    }
+
+    // Build ACK response packet based on received message
+    function buildAckBodyFromMessage(decrypted) {
+      const ackHead = decrypted.slice(2, 7);
+      const ack = new Uint8Array(7);
+      ack[0] = 0xfe;
+      ack[1] = 9;
+      ack.set(ackHead, 2);
+      const crc = crc16Modbus(ack.slice(0, 7));
+      const full = new Uint8Array(9);
+      full.set(ack);
+      full[7] = crc & 0xff;
+      full[8] = crc >> 8;
+      return full;
+    }
+
+    // Send encrypted message to the cube
+    async function sendEncrypted(bytes) {
+      const len = bytes.length + 2;
+      const paddedLen = Math.ceil(len / 16) * 16;
+      const msg = new Uint8Array(paddedLen);
+      msg[0] = 0xfe;
+      msg[1] = len;
+      msg.set(bytes, 2);
+      const crc = crc16Modbus(msg.slice(0, len - 2));
+      msg[len - 2] = crc & 0xff;
+      msg[len - 1] = crc >> 8;
+      const encrypted = encryptMessage(msg);
+      log("Sending encrypted: " + Array.from(encrypted).map(x => x.toString(16).padStart(2, '0')).join(' '));
+      log("Sent message decrypted: " + Array.from(msg).map(x => x.toString(16).padStart(2, '0')).join(' '));
+      await fff6Characteristic.writeValueWithoutResponse(encrypted.buffer);
+    }
+
+    // Send ACK to cube
+    async function sendAck(decrypted) {
+      const ack = buildAckBodyFromMessage(decrypted);
+      await sendEncrypted(ack.slice(2));
+    }
+
+    // Event listener for Connect button
+    document.getElementById("connectBtn").onclick = async () => {
+      try {
+        const device = await navigator.bluetooth.requestDevice({
+          filters: [{ namePrefix: "QY-QYSC" }],
+          optionalServices: [0xfff0]
+        });
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService(0xfff0);
+        const characteristic = await service.getCharacteristic(0xfff6);
+        fff6Characteristic = characteristic;
+
+        // Handle notifications from cube
+        fff6Characteristic.addEventListener("characteristicvaluechanged", async event => {
+          const value = new Uint8Array(event.target.value.buffer);
+          const decrypted = decryptMessage(value);
+          log("Received decrypted: " + Array.from(decrypted).map(x => x.toString(16).padStart(2, '0')).join(' '));
+
+          // Handle different message types
+          if (decrypted[0] === 0xfe && decrypted[2] === 0x02) {
+            const state = parseCubeState(decrypted.slice(7, 34));
+            renderCube(state);
+            const battery = decrypted[35];
+            document.getElementById("batteryLevel").textContent = battery;
+            await sendAck(decrypted);
+            log("ACK sent for Cube Hello. Battery: " + battery + "%");
+          } else if (decrypted[0] === 0xfe && decrypted[2] === 0x03) {
+            const needsAck = decrypted[91] === 1;
+            const state = parseCubeState(decrypted.slice(7, 34));
+            renderCube(state);
+            const battery = decrypted[35];
+            document.getElementById("batteryLevel").textContent = battery;
+            const move = decrypted[34];
+            log("Move: " + move + (needsAck ? " (needs ACK)" : "") + ", Battery: " + battery + "%");
+            if (needsAck) {
+              await sendAck(decrypted);
+              log("ACK sent for State Change.");
+            }
+          } else if (decrypted[0] === 0xfe && decrypted[2] === 0x04) {
+            const state = parseCubeState(decrypted.slice(7, 34));
+            renderCube(state);
+          }
+        });
+
+        await fff6Characteristic.startNotifications();
+        log("Notifications started.");
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        log("Connected to cube: " + device.name);
+
+        const macStr = prompt("Enter cube MAC address (e.g. CC:A3:00:00:25:13)\nIf you are using Google Chrome, you can find it at:\nchrome://bluetooth-internals/#devices");
+        const mac = macStr.split(":").map(h => parseInt(h, 16)).reverse();
+        log("Reversed MAC: " + mac.map(b => b.toString(16).padStart(2, '0')).join(':'));
+        const appHelloPayload = buildAppHello(mac);
+        await sendEncrypted(appHelloPayload);
+        log("App Hello sent.");
+
+      } catch (err) {
+        log("Error: " + err);
+      }
+    };
+
+    // Event listener for Reset button
+    document.getElementById("resetCubeBtn").onclick = sendSyncState;
+  </script>
+</body>
+</html>
