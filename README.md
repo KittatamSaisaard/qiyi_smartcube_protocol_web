@@ -1,3 +1,5 @@
+
+
 # QiYi Smart Cube Web
 
 This is a browser-based interface for connecting and interacting with a [QiYi Smart Cube](https://speedcubeshop.com/products/qiyi-ai-3x3-bluetooth-smart-cube-speed-version) using JavaScript, HTML, and CSS. It communicates with the cube via Bluetooth Low Energy (BLE) and visualises the cube’s state in real time.
